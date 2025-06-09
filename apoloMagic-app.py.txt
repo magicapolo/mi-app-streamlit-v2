@@ -1,0 +1,161 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go # Para gráficos interactivos
+
+# --- Funciones de Lógica de Trading ---
+
+def detectar_soporte_resistencia(data: pd.Series, window: int = 10):
+    """
+    Calcula soporte y resistencia como el mínimo y máximo de una ventana móvil.
+    Args:
+        data (pd.Series): Serie de datos de precios.
+        window (int): Tamaño de la ventana para calcular min/max.
+    Returns:
+        tuple: (soporte, resistencia) como Series de Pandas.
+    """
+    if len(data) < window:
+        return pd.Series([np.nan]*len(data)), pd.Series([np.nan]*len(data))
+    
+    soporte = data.rolling(window=window).min()
+    resistencia = data.rolling(window=window).max()
+    return soporte, resistencia
+
+def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int = 10, umbral: float = 0.01):
+    """
+    Predice si el siguiente valor será mayor o menor al target_value (ej. 1.50)
+    basándose en la posición actual respecto a soporte y resistencia.
+    
+    Args:
+        data (pd.Series): Serie de datos de precios.
+        target_value (float): El valor objetivo (ej. 1.50) para la predicción.
+        window (int): Tamaño de la ventana para calcular soporte/resistencia.
+        umbral (float): Margen alrededor de soporte/resistencia para la predicción.
+        
+    Returns:
+        str: Mensaje de predicción o estado.
+    """
+    if len(data) < window:
+        st.error(f"⚠️ **Error:** Necesitas al menos {window} puntos de datos para la ventana seleccionada.")
+        return "Insuficientes datos para predecir"
+
+    soporte, resistencia = detectar_soporte_resistencia(data, window)
+    
+    actual = data.iloc[-1]
+    soporte_actual = soporte.iloc[-1]
+    resistencia_actual = resistencia.iloc[-1]
+
+    st.subheader("📊 Análisis Actual")
+    st.write(f"**Valor actual:** `{actual:.4f}`")
+    st.info(f"**Soporte detectado:** `{soporte_actual:.4f}`")
+    st.info(f"**Resistencia detectada:** `{resistencia_actual:.4f}`")
+    st.write(f"**Valor Objetivo:** `{target_value:.4f}`")
+    st.write(f"**Umbral de sensibilidad:** `{umbral:.4f}`")
+
+    if np.isnan(soporte_actual) or np.isnan(resistencia_actual):
+        st.warning("⚠️ **Advertencia:** Los niveles de soporte/resistencia no se pueden calcular para todos los puntos con la ventana actual.")
+        return "Insuficientes datos en la ventana actual"
+
+    prediccion_mensaje = "No hay una señal clara."
+    if actual <= soporte_actual + umbral:
+        # Si el precio está cerca o por debajo del soporte, es probable que rebote al alza
+        prediccion_mensaje = f"📈 **PREDICCIÓN:** Se espera un movimiento **MAYOR a {target_value:.4f}** (cerca del soporte)."
+        st.success(prediccion_mensaje)
+    elif actual >= resistencia_actual - umbral:
+        # Si el precio está cerca o por encima de la resistencia, es probable que rebote a la baja
+        prediccion_mensaje = f"📉 **PREDICCIÓN:** Se espera un movimiento **MENOR a {target_value:.4f}** (cerca de la resistencia)."
+        st.error(prediccion_mensaje)
+    else:
+        # Si está en medio, es incierto
+        prediccion_mensaje = "🤔 **PREDICCIÓN:** El valor actual está entre soporte y resistencia. La dirección es **INCIERTA**."
+        st.warning(prediccion_mensaje)
+    
+    return prediccion_mensaje # Devolvemos el mensaje para referencia, aunque ya se muestra
+
+# --- Configuración de la Página Streamlit ---
+st.set_page_config(
+    page_title="Predicción de Trading (Soporte/Resistencia)",
+    page_icon="📈",
+    layout="wide" # Diseño amplio para mejor visualización
+)
+
+st.title("🤖 Bot Predictor de Trading (Soporte y Resistencia)")
+
+st.markdown("""
+Esta aplicación te ayuda a predecir si el siguiente valor de un activo será **MAYOR** o **MENOR** a un valor objetivo
+(ej. 1.50) basándose en los conceptos de soporte y resistencia de una ventana móvil.
+""")
+
+# --- Entrada de Datos del Usuario ---
+st.sidebar.header("⚙️ Configuración y Datos")
+
+datos_input_str = st.sidebar.text_area(
+    "**Ingresa tus valores numéricos históricos (separados por comas):**",
+    value="1.45, 1.48, 1.52, 1.49, 1.51, 1.47, 1.53, 1.46, 1.50, 1.49, 1.51, 1.52, 1.50, 1.48, 1.47, 1.49, 1.51, 1.50",
+    height=150,
+    help="Introduce una serie de números que representen los precios del activo."
+)
+
+target_value = st.sidebar.number_input(
+    "**Valor Objetivo para la Predicción (ej. 1.50):**",
+    min_value=0.01, max_value=100.0, value=1.50, step=0.01,
+    help="El valor contra el cual se compara la predicción (mayor o menor)."
+)
+
+window_size = st.sidebar.slider(
+    "**Tamaño de la Ventana Móvil (para S/R):**",
+    min_value=3, max_value=50, value=10, step=1,
+    help="Número de puntos de datos para calcular el soporte y la resistencia."
+)
+
+threshold = st.sidebar.slider(
+    "**Umbral de Sensibilidad (Margen S/R):**",
+    min_value=0.001, max_value=0.1, value=0.01, format="%.3f", step=0.001,
+    help="Define qué tan cerca debe estar el precio de S/R para activar una predicción."
+)
+
+st.sidebar.markdown("---") # Divisor en la barra lateral
+
+# --- Botón de Predicción ---
+if st.sidebar.button("✨ Realizar Predicción"):
+    if not datos_input_str:
+        st.error("Por favor, ingresa los valores numéricos para poder realizar la predicción.")
+    else:
+        try:
+            # Convierte la entrada de string a una serie de pandas
+            datos_numericos = [float(x.strip()) for x in datos_input_str.split(',') if x.strip()]
+            if not datos_numericos:
+                st.error("No se detectaron números válidos en la entrada. Revisa el formato.")
+            else:
+                data_series = pd.Series(datos_numericos)
+                
+                # Genera la predicción
+                prediccion_mensaje = predecir_direccion(data_series, target_value, window_size, threshold)
+                
+                # --- Visualización de Datos y S/R ---
+                st.subheader("📈 Gráfico de Precios con Soporte y Resistencia")
+                
+                soporte_line, resistencia_line = detectar_soporte_resistencia(data_series, window_size)
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=list(range(len(data_series))), y=data_series, mode='lines+markers', name='Precios', line=dict(color='blue')))
+                fig.add_trace(go.Scatter(x=list(range(len(soporte_line))), y=soporte_line, mode='lines', name='Soporte', line=dict(color='green', dash='dot')))
+                fig.add_trace(go.Scatter(x=list(range(len(resistencia_line))), y=resistencia_line, mode='lines', name='Resistencia', line=dict(color='red', dash='dot')))
+                
+                # Añadir el valor objetivo
+                fig.add_hline(y=target_value, line_dash="dot", line_color="purple", annotation_text=f"Objetivo: {target_value:.2f}", annotation_position="top right")
+
+                fig.update_layout(
+                    title='Historial de Precios y Niveles S/R',
+                    xaxis_title='Puntos de Datos',
+                    yaxis_title='Valor',
+                    height=500,
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        except ValueError:
+            st.error("Error: Por favor, asegúrate de que los datos ingresados sean solo números válidos separados por comas.")
+
+st.markdown("---")
+st.caption("Desarrollado con Streamlit por tu AI asistente.")
