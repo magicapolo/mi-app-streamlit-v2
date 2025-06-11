@@ -17,29 +17,58 @@ def detectar_soporte_resistencia(data: pd.Series, window: int):
     Returns:
         tuple: (soporte, resistencia) como Series de Pandas.
     """
-    # Aseguramos que la ventana sea al menos 1 y no mayor que los datos disponibles.
-    # min_periods=1 permite calcular el rolling min/max incluso con un solo dato en la ventana inicial.
     actual_window = max(1, min(window, len(data)))
-    
     if len(data) == 0:
-        return pd.Series([]), pd.Series([]) # Retorna series vacías si no hay datos
+        return pd.Series([]), pd.Series([]) 
     
     soporte = data.rolling(window=actual_window, min_periods=1).min()
     resistencia = data.rolling(window=actual_window, min_periods=1).max()
     
     return soporte, resistencia
 
-def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int = 10, umbral: float = 0.01):
+def analizar_tendencia(data: pd.Series, short_sma_window: int = 5, long_sma_window: int = 20):
+    """
+    Analiza la tendencia de los datos usando Medias Móviles Simples (SMA).
+    
+    Args:
+        data (pd.Series): Serie de datos de precios.
+        short_sma_window (int): Ventana para la SMA corta.
+        long_sma_window (int): Ventana para la SMA larga.
+        
+    Returns:
+        str: "Alcista", "Bajista", "Estable" o "Insuficientes datos".
+    """
+    if len(data) < long_sma_window:
+        return "Insuficientes datos para tendencia"
+
+    sma_short = data.rolling(window=short_sma_window, min_periods=1).mean()
+    sma_long = data.rolling(window=long_sma_window, min_periods=1).mean()
+
+    # Si el precio actual está por encima de la SMA corta
+    # y la SMA corta está por encima de la SMA larga
+    if data.iloc[-1] > sma_short.iloc[-1] and sma_short.iloc[-1] > sma_long.iloc[-1]:
+        return "Alcista"
+    # Si el precio actual está por debajo de la SMA corta
+    # y la SMA corta está por debajo de la SMA larga
+    elif data.iloc[-1] < sma_short.iloc[-1] and sma_short.iloc[-1] < sma_long.iloc[-1]:
+        return "Bajista"
+    else:
+        return "Estable"
+
+def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int = 10, umbral: float = 0.01,
+                       short_sma_window: int = 5, long_sma_window: int = 20):
     """
     Predice si el siguiente valor será mayor o menor al target_value (ej. 1.50)
     basándose en la posición actual respecto a soporte y resistencia.
-    También incluye alertas para valores altos (5.00 y 10.00).
+    También incluye alertas para valores altos y análisis de tendencias.
     
     Args:
         data (pd.Series): Serie de datos de precios.
         target_value (float): El valor objetivo (ej. 1.50) para la predicción.
         window (int): Tamaño deseado de la ventana para calcular soporte/resistencia.
         umbral (float): Margen alrededor de soporte/resistencia para la predicción.
+        short_sma_window (int): Ventana para la SMA corta para tendencia.
+        long_sma_window (int): Ventana para la SMA larga para tendencia.
         
     Returns:
         str: Mensaje de predicción o estado.
@@ -48,13 +77,13 @@ def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int 
         st.error("⚠️ **Error:** No hay datos para predecir.")
         return "No hay datos"
     
-    # --- Manejar 'menos coeficientes' / ventana dinámica ---
+    # --- Manejar 'menos coeficientes' / ventana dinámica para S/R ---
     adjusted_window = max(2, min(window, len(data)))
-    if len(data) == 1: # Caso especial para un solo punto de datos
+    if len(data) == 1: 
         adjusted_window = 1
         st.warning("ℹ️ **Nota:** Con un solo punto de datos, el soporte y la resistencia son el mismo valor. La predicción será limitada.")
     elif adjusted_window < window:
-        st.warning(f"ℹ️ **Nota:** La ventana deseada de `{window}` es mayor que los datos disponibles (`{len(data)}`). Se ajustó la ventana a `{adjusted_window}`.")
+        st.warning(f"ℹ️ **Nota:** La ventana deseada de `{window}` para S/R es mayor que los datos disponibles (`{len(data)}`). Se ajustó la ventana a `{adjusted_window}`.")
 
     soporte, resistencia = detectar_soporte_resistencia(data, adjusted_window)
     
@@ -76,16 +105,36 @@ def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int 
         st.warning(f"🔔 **Advertencia Alta:** El nivel de resistencia detectado ({resistencia_actual:.4f}) es igual o mayor a **10.00**. ¡Potencialmente muy alto!")
     
     # --- Alerta para valores mayores a 5.00 (general) ---
-    if actual >= 5.00 and actual < 10.00: # Se ejecuta solo si no es ya >= 10.00
+    if actual >= 5.00 and actual < 10.00: 
         st.error(f"🚨 **¡ALERTA!** El valor actual ({actual:.4f}) es igual o mayor a **5.00**.")
-    elif resistencia_actual >= 5.00 and resistencia_actual < 10.00: # Se ejecuta solo si no es ya >= 10.00
+    elif resistencia_actual >= 5.00 and resistencia_actual < 10.00: 
         st.warning(f"🔔 **Advertencia:** El nivel de resistencia detectado ({resistencia_actual:.4f}) es igual o mayor a **5.00**.")
-    
+
+    # --- Alerta para valores mayores a 2.00 (NUEVA) ---
+    if actual >= 2.00 and actual < 5.00: # Se ejecuta solo si no es ya >= 5.00 o >= 10.00
+        st.success(f"🟢 **¡Alerta Importante!** El valor actual ({actual:.4f}) es igual o mayor a **2.00**. ¡Buen punto!")
+    elif resistencia_actual >= 2.00 and resistencia_actual < 5.00:
+        st.info(f"🔵 **Nota:** El nivel de resistencia detectado ({resistencia_actual:.4f}) es igual o mayor a **2.00**.")
+
+    # --- Análisis y Alertas de Tendencia (NUEVO) ---
+    st.subheader("📈 Análisis de Tendencia")
+    tendencia = analizar_tendencia(data, short_sma_window, long_sma_window)
+    if tendencia == "Alcista":
+        st.success(f"🚀 **TENDENCIA:** ¡Actualmente estamos en una tendencia **ALCISTA**!")
+    elif tendencia == "Bajista":
+        st.error(f"📉 **TENDENCIA:** Se ha detectado una tendencia **BAJISTA**.")
+    elif tendencia == "Estable":
+        st.info(f"↔️ **TENDENCIA:** La tendencia actual parece **ESTABLE**.")
+    else:
+        st.warning(f"⚠️ **TENDENCIA:** {tendencia} (Necesitas más datos para un análisis de tendencia fiable).")
+
+    # Validación final para la predicción S/R principal
     if np.isnan(soporte_actual) or np.isnan(resistencia_actual):
-        st.warning("⚠️ **Advertencia:** Los niveles de soporte/resistencia no se pudieron calcular completamente con los datos/ventana actuales. La predicción puede ser menos precisa.")
+        st.warning("⚠️ **Advertencia:** Los niveles de soporte/resistencia no se pudieron calcular completamente con los datos/ventana actuales. La predicción basada en S/R puede ser menos precisa.")
         return "Insuficientes datos o S/R no calculable"
 
     # Lógica de predicción principal (mayor/menor a 1.50)
+    st.subheader("🎯 Predicción S/R Principal")
     prediccion_mensaje = "No hay una señal clara."
     if actual <= soporte_actual + umbral:
         prediccion_mensaje = f"📈 **PREDICCIÓN:** Se espera un movimiento **MAYOR a {target_value:.4f}** (cerca del soporte)."
@@ -101,16 +150,16 @@ def predecir_direccion(data: pd.Series, target_value: float = 1.50, window: int 
 
 # --- Configuración de la Página Streamlit ---
 st.set_page_config(
-    page_title="Predicción de Trading (Soporte/Resistencia)",
+    page_title="Predicción de Trading Avanzada",
     page_icon="📈",
     layout="wide" # Diseño amplio para mejor visualización
 )
 
-st.title("🤖 Bot Predictor de Trading (Soporte y Resistencia)")
+st.title("🤖 Bot Predictor de Trading (Soporte, Resistencia y Tendencias)")
 
 st.markdown("""
-Esta aplicación te ayuda a predecir si el siguiente valor de un activo será **MAYOR** o **MENOR** a un valor objetivo
-basándose en los conceptos de soporte y resistencia de una ventana móvil. **Ahora con ajustes para datos limitados y alertas de valores altos (5.00 y 10.00).**
+Esta aplicación te ayuda a predecir la dirección de un activo basándose en soporte, resistencia y tendencias.
+También te alerta sobre coeficientes altos.
 """)
 
 # --- Entrada de Datos del Usuario ---
@@ -118,9 +167,9 @@ st.sidebar.header("⚙️ Configuración y Datos")
 
 datos_input_str = st.sidebar.text_area(
     "**Ingresa tus valores numéricos históricos (separados por comas):**",
-    value="1.45, 1.48, 1.52, 1.49, 1.51, 1.47, 1.53, 1.46, 1.50, 1.49, 1.51, 1.52, 1.50, 1.48, 1.47, 1.49, 1.51, 1.50, 5.20, 9.80, 10.10",
-    height=150,
-    help="Introduce una serie de números que representen los precios del activo."
+    value="1.45, 1.48, 1.52, 1.49, 1.51, 1.47, 1.53, 1.46, 1.50, 1.49, 1.51, 1.52, 1.50, 1.48, 1.47, 1.49, 1.51, 1.50, 2.10, 3.50, 5.20, 9.80, 10.10",
+    height=180, # Un poco más de altura para más datos
+    help="Introduce una serie de números que representen los precios del activo. El teclado numérico de tu teléfono se debería desplegar automáticamente."
 )
 
 target_value = st.sidebar.number_input(
@@ -130,9 +179,9 @@ target_value = st.sidebar.number_input(
 )
 
 window_size = st.sidebar.slider(
-    "**Tamaño de la Ventana Móvil (para S/R):**",
-    min_value=1, max_value=50, value=10, step=1, # Se puede ajustar hasta 1
-    help="Número de puntos de datos para calcular el soporte y la resistencia. Se ajustará dinámicamente si hay menos datos."
+    "**Tamaño Ventana Móvil (S/R):**",
+    min_value=1, max_value=50, value=10, step=1, 
+    help="Número de puntos para calcular S/R. Se ajusta dinámicamente si hay menos datos."
 )
 
 threshold = st.sidebar.slider(
@@ -141,27 +190,42 @@ threshold = st.sidebar.slider(
     help="Define qué tan cerca debe estar el precio de S/R para activar una predicción."
 )
 
+st.sidebar.markdown("---")
+st.sidebar.header("📊 Configuración de Tendencia")
+short_sma = st.sidebar.slider(
+    "**Ventana SMA Corta (Tendencia):**",
+    min_value=2, max_value=20, value=5, step=1,
+    help="Número de puntos para la Media Móvil Simple (SMA) corta."
+)
+long_sma = st.sidebar.slider(
+    "**Ventana SMA Larga (Tendencia):**",
+    min_value=5, max_value=50, value=20, step=1,
+    help="Número de puntos para la Media Móvil Simple (SMA) larga (debe ser mayor que la corta)."
+)
+
 st.sidebar.markdown("---") # Divisor en la barra lateral
 
 # --- Botón de Predicción ---
-if st.sidebar.button("✨ Realizar Predicción"):
+if st.sidebar.button("✨ Realizar Predicción Avanzada"):
     if not datos_input_str:
         st.error("Por favor, ingresa los valores numéricos para poder realizar la predicción.")
     else:
         try:
-            # Convierte el string de entrada a una lista de floats
             datos_numericos = [float(x.strip()) for x in datos_input_str.split(',') if x.strip()]
             
             if not datos_numericos:
                 st.error("No se detectaron números válidos en la entrada. Revisa el formato.")
+            elif len(datos_numericos) < max(short_sma, long_sma):
+                st.warning(f"⚠️ **Advertencia:** Necesitas al menos **{max(short_sma, long_sma)}** puntos de datos para un análisis de tendencia completo con las configuraciones actuales.")
+                data_series = pd.Series(datos_numericos)
+                # Ejecutar predicción incluso si no hay suficientes datos para tendencia completa
+                prediccion_mensaje = predecir_direccion(data_series, target_value, window_size, threshold, short_sma, long_sma)
             else:
                 data_series = pd.Series(datos_numericos)
-                
-                # Genera la predicción
-                prediccion_mensaje = predecir_direccion(data_series, target_value, window_size, threshold)
+                prediccion_mensaje = predecir_direccion(data_series, target_value, window_size, threshold, short_sma, long_sma)
                 
                 # --- Visualización de Datos y S/R ---
-                st.subheader("📈 Gráfico de Precios con Soporte y Resistencia")
+                st.subheader("📈 Gráfico de Precios con Soporte, Resistencia y Tendencias")
                 
                 plot_window_for_sr = max(1, min(window_size, len(data_series)))
                 soporte_line, resistencia_line = detectar_soporte_resistencia(data_series, plot_window_for_sr)
@@ -171,18 +235,22 @@ if st.sidebar.button("✨ Realizar Predicción"):
                 fig.add_trace(go.Scatter(x=list(range(len(soporte_line))), y=soporte_line, mode='lines', name='Soporte', line=dict(color='green', dash='dot')))
                 fig.add_trace(go.Scatter(x=list(range(len(resistencia_line))), y=resistencia_line, mode='lines', name='Resistencia', line=dict(color='red', dash='dot')))
                 
-                # Añadir el valor objetivo (1.50)
+                # Añadir SMAs al gráfico
+                if len(data_series) >= long_sma: # Solo si hay suficientes datos para las SMAs
+                    sma_short_line = data_series.rolling(window=short_sma, min_periods=1).mean()
+                    sma_long_line = data_series.rolling(window=long_sma, min_periods=1).mean()
+                    fig.add_trace(go.Scatter(x=list(range(len(sma_short_line))), y=sma_short_line, mode='lines', name=f'SMA {short_sma}', line=dict(color='purple', dash='solid')))
+                    fig.add_trace(go.Scatter(x=list(range(len(sma_long_line))), y=sma_long_line, mode='lines', name=f'SMA {long_sma}', line=dict(color='brown', dash='dash')))
+
+                # Añadir líneas de alerta
                 fig.add_hline(y=target_value, line_dash="dot", line_color="purple", annotation_text=f"Objetivo: {target_value:.2f}", annotation_position="top right")
-
-                # Añadir línea de alerta de 5.00
-                fig.add_hline(y=5.00, line_dash="dash", line_color="orange", annotation_text="Alerta 5.00", annotation_position="top left")
-
-                # Añadir línea de alerta de 10.00 (NUEVA)
-                fig.add_hline(y=10.00, line_dash="dashdot", line_color="red", annotation_text="Alerta 10.00", annotation_position="bottom right")
+                fig.add_hline(y=2.00, line_dash="dot", line_color="blue", annotation_text="Alerta 2.00", annotation_position="top left") # NUEVA LÍNEA 2.0
+                fig.add_hline(y=5.00, line_dash="dash", line_color="orange", annotation_text="Alerta 5.00", annotation_position="bottom right")
+                fig.add_hline(y=10.00, line_dash="dashdot", line_color="red", annotation_text="Alerta 10.00", annotation_position="top left")
 
 
                 fig.update_layout(
-                    title='Historial de Precios y Niveles S/R',
+                    title='Historial de Precios, Niveles S/R y Tendencias',
                     xaxis_title='Puntos de Datos',
                     yaxis_title='Valor',
                     height=500,
